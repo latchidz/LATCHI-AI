@@ -63,7 +63,7 @@ jobs:
       - name: تسمية
         run: |
           mkdir -p out
-          find android/app/build/outputs -name "*.apk" -exec cp {} out/LatchiAI-1.0.1.apk \;
+          find android/app/build/outputs -name "*.apk" -exec cp {} out/LatchiAI-1.0.2.apk \;
           ls -lh out/
 
       - uses: actions/upload-artifact@v4
@@ -76,10 +76,10 @@ jobs:
         if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0.1
-          name: "Latchi AI 1.0.1 — تطبيق ذكاء اصطناعي"
+          tag_name: v1.0.2
+          name: "Latchi AI 1.0.2 — تطبيق ذكاء اصطناعي"
           body: |
-            ## Latchi AI 1.0.1
+            ## Latchi AI 1.0.2
 
             تطبيق ذكاء اصطناعي كامل — أي API متوافق مع OpenAI.
 

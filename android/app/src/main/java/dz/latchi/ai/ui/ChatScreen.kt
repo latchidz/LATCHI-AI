@@ -414,7 +414,10 @@ private fun InputBar(
                 Modifier
                     .size(46.dp)
                     .clip(RoundedCornerShape(15.dp))
-                    .background(if (streaming) ErrRed else BrandBrush)
+                    .background(
+                        if (streaming) Brush.linearGradient(listOf(ErrRed, ErrRed))
+                        else BrandBrush
+                    )
                     .clickable { if (streaming) onStop() else onSend() },
                 contentAlignment = Alignment.Center,
             ) {

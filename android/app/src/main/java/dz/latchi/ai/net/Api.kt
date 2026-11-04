@@ -50,9 +50,8 @@ object Api {
                 val id = o.optString("id").ifBlank { o.optString("name") }
                 if (id.isBlank()) continue
                 val name = o.optString("name").ifBlank { id }
-                val ctx = o.optInt("context_length", 0)
-                    .takeIf { it > 0 }
-                    ?: (o.optJSONObject("top_provider")?.optInt("context_length", 0) ?: 0)
+                val topCtx: Int = o.optJSONObject("top_provider")?.optInt("context_length") ?: 0
+                val ctx: Int = o.optInt("context_length").takeIf { it > 0 } ?: topCtx
                 val free = o.optString("id").endsWith(":free") ||
                         (o.optJSONObject("pricing")?.let {
                             it.optString("prompt").toDoubleOrNull() == 0.0 &&
