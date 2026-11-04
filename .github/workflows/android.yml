@@ -1,0 +1,102 @@
+name: Build Latchi AI APK
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'android/**'
+      - '.github/workflows/android.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: مفتاح التوقيع الثابت
+        working-directory: android
+        run: |
+          set -e
+          base64 -d keystore.b64 > latchi-ai.p12
+          cat > keystore.properties <<PP
+          storeFile=latchi-ai.p12
+          storePassword=latchiai2026
+          keyAlias=latchiai
+          keyPassword=latchiai2026
+          PP
+          openssl pkcs12 -in latchi-ai.p12 -passin pass:latchiai2026 \
+            -nokeys -clcerts 2>/dev/null | openssl x509 -noout -fingerprint -sha256 || true
+          echo "✓ المفتاح جاهز"
+
+      - name: بناء APK
+        working-directory: android
+        run: |
+          set -e
+          gradle assembleRelease --no-daemon --stacktrace
+          find app/build/outputs -name "*.apk" -exec ls -lh {} \;
+
+      - name: التحقق من التوقيع
+        working-directory: android
+        run: |
+          set -e
+          APK=$(find app/build/outputs -name "*.apk" | head -1)
+          BT=$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)
+          "$ANDROID_HOME/build-tools/$BT/apksigner" verify --print-certs "$APK" | tee /tmp/c.txt
+          grep -q "LATCHI AI" /tmp/c.txt || { echo "::error::توقيع غالط"; exit 1; }
+          echo "✓ موقّع"
+
+      - name: تسمية
+        run: |
+          mkdir -p out
+          find android/app/build/outputs -name "*.apk" -exec cp {} out/LatchiAI-1.0.0.apk \;
+          ls -lh out/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LatchiAI-APK
+          path: out/*.apk
+          retention-days: 90
+
+      - name: Release
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.0
+          name: "Latchi AI 1.0.0 — تطبيق ذكاء اصطناعي"
+          body: |
+            ## Latchi AI 1.0.0
+
+            تطبيق ذكاء اصطناعي كامل — أي API متوافق مع OpenAI.
+
+            ### المزايا
+            - 🤖 **اختار الموديل** من قائمة حقيقية (OpenRouter · Groq · NVIDIA · Mistral · Cerebras)
+            - ⚡ **رد فوري حرف بحرف** (streaming)
+            - 🖼️ **صور** — ابعث لقطة والموديل يشوفها
+            - 🎨 **Markdown** — كود · جداول · عناوين
+            - 💾 **محادثات محفوظة** محلياً
+            - 🌙 واجهة daك · عربي RTL
+            - ⚙️ temperature · max tokens · system prompt
+
+            ### البدء السريع
+            1. ثبّت APK
+            2. Settings ⇒ زيد مزوّد ⇒ OpenRouter
+            3. حط المفتاح من openrouter.ai/keys
+            4. اختار موديل **مجاني** (يبدا بـ:free)
+            5. اكتب ✅
+          files: out/*.apk
+          fail_on_unmatched_files: false
