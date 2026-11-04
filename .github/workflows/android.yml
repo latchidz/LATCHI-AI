@@ -63,7 +63,7 @@ jobs:
       - name: تسمية
         run: |
           mkdir -p out
-          find android/app/build/outputs -name "*.apk" -exec cp {} out/LatchiAI-1.0.0.apk \;
+          find android/app/build/outputs -name "*.apk" -exec cp {} out/LatchiAI-1.1.0.apk \;
           ls -lh out/
 
       - uses: actions/upload-artifact@v4
@@ -76,10 +76,10 @@ jobs:
         if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0.0
-          name: "Latchi AI 1.0.0 — تطبيق ذكاء اصطناعي"
+          tag_name: v1.1.0
+          name: "Latchi AI 1.1.0 — تطبيق ذكاء اصطناعي"
           body: |
-            ## Latchi AI 1.0.0
+            ## Latchi AI 1.1.0
 
             تطبيق ذكاء اصطناعي كامل — أي API متوافق مع OpenAI.
 
@@ -92,11 +92,17 @@ jobs:
             - 🌙 واجهة daك · عربي RTL
             - ⚙️ temperature · max tokens · system prompt
 
-            ### البدء السريع
+            ### 🎉 الجديد فـ1.1.0 — **يخدم بلا مفتاح!**
+            - ✅ **مزوّد مجاني مبني** — ما تحتاج حتى إعداد
+            - ✅ تفتح التطبيق ⇒ اكتب ⇒ يرد
+            - ✅ اختار من موديلين مجانيين جاهزين
+            - ✅ المفتاح ولا مزوّد آخر: اختياري
+
+            ### البدء
             1. ثبّت APK
-            2. Settings ⇒ زيد مزوّد ⇒ OpenRouter
-            3. حط المفتاح من openrouter.ai/keys
-            4. اختار موديل **مجاني** (يبدا بـ:free)
-            5. اكتب ✅
+            2. افتح
+            3. اكتب ✅
+
+            > اختياري: Settings ⇒ زيد OpenRouter/Groq بمفتاحك = موديلات أقوى
           files: out/*.apk
           fail_on_unmatched_files: false

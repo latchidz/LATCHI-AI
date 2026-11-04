@@ -102,6 +102,14 @@ fun SettingsScreen(
                             Text(p.baseUrl, fontSize = 9.5.sp, color = TextMuted,
                                 maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
+                        if (p.presetId == dz.latchi.ai.data.FREE_PRESET_ID) {
+                            Surface(shape = RoundedCornerShape(7.dp),
+                                color = OkGreen.copy(alpha = .15f)) {
+                                Text("بلا مفتاح", fontSize = 9.sp, color = OkGreen,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp))
+                            }
+                            Spacer(Modifier.width(4.dp))
+                        }
                         if (store.activeProviderId == p.id) {
                             Surface(shape = RoundedCornerShape(7.dp),
                                 color = OkGreen.copy(alpha = .16f)) {

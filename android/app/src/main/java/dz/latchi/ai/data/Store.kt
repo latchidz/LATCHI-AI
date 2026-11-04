@@ -72,6 +72,25 @@ class Store(ctx: Context) {
                 .apply()
         }
 
+    // ═══════ تهيئة أول تشغيل: مزوّد مجاني جاهز ═══════
+    /** يضمن وجود مزوّد مجاني وموديل مختار — باش التطبيق يخدم ديراكت. */
+    fun ensureDefault() {
+        val list = providers()
+        if (list.none { it.presetId == FREE_PRESET_ID }) {
+            list.add(0, freeProvider())
+            saveProviders(list)
+        }
+        if (activeProviderId.isBlank()) {
+            activeProviderId = list.first { it.presetId == FREE_PRESET_ID }.id
+        }
+        if (activeModel.isBlank()) activeModel = FREE_MODEL
+        val pid = activeProviderId
+        if (pid.isNotBlank() && models(pid).isEmpty()) {
+            val prov = providers().firstOrNull { it.id == pid }
+            if (prov?.presetId == FREE_PRESET_ID) saveModels(pid, FREE_MODELS)
+        }
+    }
+
     // ═══════ المحادثات ═══════
     fun chats(): List<Chat> {
         val out = ArrayList<Chat>()
@@ -102,6 +121,12 @@ data class Preset(
     val note: String,
 )
 
+/** موديلات المزوّد المجاني (بلا مفتاح) — مضمّنة باش ما تحتاجش تحميل. */
+val FREE_MODELS = listOf(
+    ModelInfo(id = "openai", name = "GPT-OSS 20B · مجاني", context = 128_000, free = true, vision = false),
+    ModelInfo(id = "openai-fast", name = "GPT-OSS 20B · سريع", context = 128_000, free = true, vision = false),
+)
+
 val PRESETS = listOf(
     Preset("openrouter", "OpenRouter", "https://openrouter.ai/api/v1", "14 موديل مجاني · مفتاح واحد"),
     Preset("groq", "Groq", "https://api.groq.com/openai/v1", "الأسرع فـالعالم"),
@@ -109,4 +134,17 @@ val PRESETS = listOf(
     Preset("mistral", "Mistral", "https://api.mistral.ai/v1", "طبقة مجانية"),
     Preset("cerebras", "Cerebras", "https://api.cerebras.ai/v1", "سريع بزاف"),
     Preset("custom", "مخصص", "", "أي API متوافق مع OpenAI"),
+)
+
+/** المزوّد المجاني المبني — يخدم بلا مفتاح بلا حتى إعداد. */
+const val FREE_PRESET_ID = "pollinations"
+const val FREE_BASE = "https://text.pollinations.ai/openai"
+const val FREE_MODEL = "openai"
+
+fun freeProvider() = Provider(
+    id = "free-builtin",
+    name = "مجاني · بلا مفتاح",
+    baseUrl = FREE_BASE,
+    apiKey = "",
+    presetId = FREE_PRESET_ID,
 )

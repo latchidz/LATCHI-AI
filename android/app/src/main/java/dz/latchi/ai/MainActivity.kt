@@ -41,7 +41,9 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun App() {
     val ctx = LocalContext.current
-    val store = remember { Store(ctx) }
+    val store = remember {
+        Store(ctx).also { it.ensureDefault() }
+    }
 
     var chats by remember { mutableStateOf(store.chats()) }
     var current by remember { mutableStateOf<Chat?>(chats.firstOrNull()) }
@@ -62,9 +64,7 @@ private fun App() {
             chats = store.chats()
             current = c
         }
-        if (store.activeProviderId.isBlank() && providers.isNotEmpty()) {
-            store.activeProviderId = providers.first().id
-        }
+        store.ensureDefault()
         // جيب تسمية السياق للموديل المختار
         val cached = store.models(store.activeProviderId)
         cached.firstOrNull { it.id == model }?.let { ctxLabel = it.ctxHuman() }

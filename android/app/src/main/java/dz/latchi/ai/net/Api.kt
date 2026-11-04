@@ -2,6 +2,8 @@ package dz.latchi.ai.net
 
 import dz.latchi.ai.data.Msg
 import dz.latchi.ai.data.ModelInfo
+import dz.latchi.ai.data.FREE_MODELS
+import dz.latchi.ai.data.FREE_PRESET_ID
 import dz.latchi.ai.data.Provider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -21,7 +23,9 @@ object Api {
         (URL(url).openConnection() as HttpURLConnection).apply {
             connectTimeout = 20_000
             readTimeout = 300_000
-            setRequestProperty("Authorization", "Bearer ${p.apiKey}")
+            // المزوّد المجاني ما يحبش Authorization — نبعثوه غير إذا كاين مفتاح
+            if (p.apiKey.isNotBlank())
+                setRequestProperty("Authorization", "Bearer ${p.apiKey}")
             setRequestProperty("Content-Type", "application/json; charset=utf-8")
             setRequestProperty("Accept", "application/json")
             setRequestProperty("HTTP-Referer", "https://github.com/latchidz")
@@ -30,6 +34,8 @@ object Api {
 
     // ═══════ قائمة الموديلات ═══════
     suspend fun listModels(p: Provider): Result<List<ModelInfo>> = withContext(Dispatchers.IO) {
+        // المجاني المضمّن: ما نحتاجوش نتصلو
+        if (p.presetId == FREE_PRESET_ID) return@withContext Result.success(FREE_MODELS)
         var conn: HttpURLConnection? = null
         try {
             conn = open("${p.baseUrl.trimEnd('/')}/models", p)
@@ -122,10 +128,10 @@ object Api {
                 } catch (_: Exception) { "" }
                 val friendly = when (code) {
                     401 -> "المفتاح ماشي صحيح — تحقق منو فـالإعدادات"
-                    402 -> "الرصيد خلص فـهذا المزود"
+                    402 -> "هذا الموديل يحب رصيد · بدّل لـ«GPT-OSS 20B · مجاني»"
                     403 -> "ممنوع — الموديل ما عندكش حق الوصول"
                     404 -> "الموديل ماشي موجود فـهذا المزود"
-                    429 -> "طلبات كثيرة (429) — استنى شوية ولا بدّل موديل"
+                    429 -> "الطلب اللي قبلو مازال يخدم — استنى 5 ثواني وعاود"
                     else -> "خطأ HTTP $code"
                 }
                 val detail = try {
