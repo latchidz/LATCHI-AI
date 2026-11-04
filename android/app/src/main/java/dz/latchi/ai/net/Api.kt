@@ -57,9 +57,18 @@ object Api {
                             it.optString("prompt").toDoubleOrNull() == 0.0 &&
                                     it.optString("completion").toDoubleOrNull() == 0.0
                         } ?: false)
-                val vision = o.optJSONArray("architecture")?.optJSONArray("input_modalities")
-                    ?.let { m -> (0 until m.length()).any { m.optString(it) == "image" } }
-                    ?: id.contains("vl") || id.contains("vision") || id.contains("omni")
+                // architecture كائن ⇒ input_modalities مصفوفة جوّاه
+                val mods = o.optJSONObject("architecture")?.optJSONArray("input_modalities")
+                var hasImg = false
+                if (mods != null) {
+                    var k = 0
+                    while (k < mods.length()) {
+                        if (mods.optString(k) == "image") { hasImg = true; break }
+                        k++
+                    }
+                }
+                val vision = hasImg || id.contains("vl") || id.contains("vision") ||
+                        id.contains("omni") || id.contains("llava")
                 out.add(ModelInfo(id = id, name = name, context = ctx, free = free, vision = vision))
             }
             Result.success(out.distinctBy { it.id }.sortedBy { it.id })
