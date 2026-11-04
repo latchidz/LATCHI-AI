@@ -304,10 +304,7 @@ private fun MessageBubble(m: Msg, streaming: Boolean, onCopy: () -> Unit) {
             ) {
                 Box(
                     Modifier
-                        .then(
-                            if (isUser) Modifier.background(UserBrush)
-                            else Modifier.background(CardBg)
-                        )
+                        .background(if (isUser) UserBrush else Brush.linearGradient(listOf(CardBg, CardBg)))
                         .padding(horizontal = 14.dp, vertical = 10.dp)
                 ) {
                     if (m.content.isEmpty() && streaming) {

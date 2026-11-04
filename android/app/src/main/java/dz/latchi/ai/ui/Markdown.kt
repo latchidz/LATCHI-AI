@@ -4,10 +4,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.withStyle
 
 /**
  * Markdown مبسّط — بلا مكتبات.
@@ -107,8 +107,8 @@ private fun inline(
         if (s[i] == '`') {
             val end = s.indexOf('`', i + 1)
             if (end > i) {
-                withStyle(SpanStyle(fontFamily = FontFamily.Monospace, color = codeFg, background = codeBg)) {
-                    b.append(s.substring(i + 1, end))
+                b.withStyle(SpanStyle(fontFamily = FontFamily.Monospace, color = codeFg, background = codeBg)) {
+                    append(s.substring(i + 1, end))
                 }
                 i = end + 1
                 continue
@@ -118,8 +118,8 @@ private fun inline(
         if (i + 1 < n && s[i] == '*' && s[i + 1] == '*') {
             val end = s.indexOf("**", i + 2)
             if (end > i) {
-                withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
-                    b.append(s.substring(i + 2, end))
+                b.withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
+                    append(s.substring(i + 2, end))
                 }
                 i = end + 2
                 continue
@@ -129,8 +129,8 @@ private fun inline(
         if (s[i] == '*') {
             val end = s.indexOf('*', i + 1)
             if (end > i) {
-                withStyle(SpanStyle(fontStyle = FontStyle.Italic)) {
-                    b.append(s.substring(i + 1, end))
+                b.withStyle(SpanStyle(fontStyle = FontStyle.Italic)) {
+                    append(s.substring(i + 1, end))
                 }
                 i = end + 1
                 continue
@@ -144,10 +144,10 @@ private fun inline(
                 if (paren > close) {
                     val label = s.substring(i + 1, close)
                     val url = s.substring(close + 2, paren)
-                    withStyle(SpanStyle(color = Cyan, fontWeight = FontWeight.Medium)) {
-                        b.append(label)
+                    b.withStyle(SpanStyle(color = Cyan, fontWeight = FontWeight.Medium)) {
+                        append(label)
                     }
-                    withStyle(SpanStyle(color = TextMuted)) { b.append(" ⟨$url⟩") }
+                    b.withStyle(SpanStyle(color = TextMuted)) { append(" ⟨$url⟩") }
                     i = paren + 1
                     continue
                 }

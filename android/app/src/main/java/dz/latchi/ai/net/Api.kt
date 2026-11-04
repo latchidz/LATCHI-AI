@@ -47,10 +47,12 @@ object Api {
 
             for (i in 0 until arr.length()) {
                 val o = arr.optJSONObject(i) ?: continue
-                val id = o.optString("id").ifBlank { o.optString("name") }.ifBlank { continue }
+                val id = o.optString("id").ifBlank { o.optString("name") }
+                if (id.isBlank()) continue
                 val name = o.optString("name").ifBlank { id }
-                val ctx = o.optInt("context_length",
-                    o.optJSONObject("top_provider")?.optInt("context_length", 0) ?: 0)
+                val ctx = o.optInt("context_length", 0)
+                    .takeIf { it > 0 }
+                    ?: (o.optJSONObject("top_provider")?.optInt("context_length", 0) ?: 0)
                 val free = o.optString("id").endsWith(":free") ||
                         (o.optJSONObject("pricing")?.let {
                             it.optString("prompt").toDoubleOrNull() == 0.0 &&
