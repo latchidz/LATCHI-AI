@@ -7,4 +7,3 @@ build/
 app/build/
 .idea/
 *.iml
-android/keystore.b64

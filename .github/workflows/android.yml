@@ -32,7 +32,7 @@ jobs:
         working-directory: android
         run: |
           set -e
-          echo "${{ secrets.ANDROID_KEYSTORE_B64 }}" | base64 -d > latchi-ai.p12
+          base64 -d keystore.b64 > latchi-ai.p12
           cat > keystore.properties <<PP
           storeFile=latchi-ai.p12
           storePassword=latchiai2026
