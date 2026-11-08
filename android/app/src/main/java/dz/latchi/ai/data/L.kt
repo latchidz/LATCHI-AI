@@ -1,6 +1,8 @@
 package dz.latchi.ai.data
 
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 
 /** اللغات المدعومة */
 enum class Lang(val code: String, val label: String, val flag: String) {
