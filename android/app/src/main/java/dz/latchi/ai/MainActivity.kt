@@ -12,7 +12,6 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
@@ -57,7 +56,8 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun readImage(uri: Uri): String? = try {
+    private fun readImage(uri: Uri): String? {
+      return try {
         val input = contentResolver.openInputStream(uri) ?: return null
         var bytes = input.readBytes()
         input.close()
@@ -75,14 +75,17 @@ class MainActivity : ComponentActivity() {
             }
         }
         Base64.encodeToString(bytes, Base64.NO_WRAP)
-    } catch (e: Exception) { null }
+      } catch (e: Exception) { null }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         val lang = ChatStore.lang(this)
         L.set(lang)
-        Pal.dark = isSystemInDarkTheme()
+        val night = resources.configuration.uiMode and
+                android.content.res.Configuration.UI_MODE_NIGHT_MASK
+        Pal.dark = night == android.content.res.Configuration.UI_MODE_NIGHT_YES
 
         setContent {
             var splash by remember { mutableStateOf(true) }
