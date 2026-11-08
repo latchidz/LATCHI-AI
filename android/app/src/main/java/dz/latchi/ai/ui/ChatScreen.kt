@@ -3,11 +3,16 @@ package dz.latchi.ai.ui
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.Base64
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -15,331 +20,195 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dz.latchi.ai.data.Chat
-import dz.latchi.ai.data.Msg
-import dz.latchi.ai.data.ModelInfo
-import dz.latchi.ai.data.Store
-import dz.latchi.ai.net.Api
-import kotlinx.coroutines.Job
+import dz.latchi.ai.data.*
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import java.io.ByteArrayOutputStream
+import kotlinx.coroutines.withContext
+import androidx.compose.ui.text.TextStyle
 
-@OptIn(ExperimentalMaterial3Api::class)
+// ═══════════════════════════════════════════════════════════
+//  الشاشة الرئيسية
+// ═══════════════════════════════════════════════════════════
 @Composable
-fun ChatScreen(
-    store: Store,
-    chat: Chat,
-    providerName: String,
-    model: String,
-    modelCtx: String,
-    onChatChange: (Chat) -> Unit,
-    onNewChat: () -> Unit,
-    onOpenDrawer: () -> Unit,
-    onPickModel: () -> Unit,
-    onSettings: () -> Unit,
-) {
+fun ChatScreen(vm: ChatVm, onOpenSettings: () -> Unit) {
     val ctx = LocalContext.current
-    val clip = LocalClipboardManager.current
-    val scope = rememberCoroutineScope()
-    val listState = rememberLazyListState()
-
-    var messages by remember(chat.id) { mutableStateOf(chat.messages) }
-    var input by remember { mutableStateOf("") }
-    var attached by remember { mutableStateOf<String?>(null) }   // base64
-    var streaming by remember { mutableStateOf(false) }
-    var job by remember { mutableStateOf<Job?>(null) }
-    var showChatMenu by remember { mutableStateOf(false) }
-
-    val settings = remember { store.settings }
-    val provider = remember { store.providers().firstOrNull { it.id == store.activeProviderId } }
-
-    // حفظ تلقائي
-    LaunchedEffect(messages) {
-        if (messages !== chat.messages) {
-            onChatChange(chat.copy(messages = messages, updated = System.currentTimeMillis()))
-        }
-    }
-
-    // تمرير لتحت
-    LaunchedEffect(messages.size, streaming) {
-        if (messages.isNotEmpty()) {
-            runCatching { listState.animateScrollToItem(messages.lastIndex) }
-        }
-    }
-
-    val pickImage = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        if (uri == null) return@rememberLauncherForActivityResult
-        try {
-            val bmp = ctx.contentResolver.openInputStream(uri)?.use {
-                BitmapFactory.decodeStream(it)
-            } ?: return@rememberLauncherForActivityResult
-            // تصغير باش ما نبعثوش صورة ضخمة
-            val max = 1024
-            val w = bmp.width; val h = bmp.height
-            val scaled = if (w > max || h > max) {
-                val r = max.toFloat() / maxOf(w, h)
-                Bitmap.createScaledBitmap(bmp, (w * r).toInt(), (h * r).toInt(), true)
-            } else bmp
-            val bos = ByteArrayOutputStream()
-            scaled.compress(Bitmap.CompressFormat.JPEG, 82, bos)
-            attached = Base64.encodeToString(bos.toByteArray(), Base64.NO_WRAP)
-        } catch (_: Exception) {}
-    }
-
-    fun stop() {
-        job?.cancel(); job = null; streaming = false
-    }
-
-    fun send() {
-        val txt = input.trim()
-        if ((txt.isEmpty() && attached == null) || streaming) return
-        val p = provider ?: run {
-            messages = messages + Msg("assistant", "⚠️ ما كاينش مزوّد. روح للإعدادات وزيد واحد.", error = true)
-            return
-        }
-        if (provider.apiKey.isBlank()) {
-            messages = messages + Msg("assistant", "⚠️ المفتاح فارغ. روح للإعدادات ودخّل API Key.", error = true)
-            return
-        }
-        if (model.isBlank()) {
-            messages = messages + Msg("assistant", "⚠️ ما اختريتش موديل. اضغط على شريحة الموديل فـالفوق.", error = true)
-            return
-        }
-
-        val userMsg = Msg("user", txt, image = attached)
-        val withUser = messages + userMsg
-        messages = withUser + Msg("assistant", "")
-        input = ""
-        val img = attached
-        attached = null
-        streaming = true
-
-        job = scope.launch {
-            val history = withUser.takeLast(24)
-            val acc = StringBuilder()
-            var lastPush = 0L
-
-            val res = Api.chat(
-                p = p,
-                model = model,
-                history = history,
-                system = settings.systemPrompt,
-                temperature = settings.temperature,
-                maxTokens = settings.maxTokens,
-            ) { delta ->
-                acc.append(delta)
-                val now = System.currentTimeMillis()
-                if (now - lastPush > 40) {
-                    lastPush = now
-                    messages = messages.dropLast(1) + Msg("assistant", acc.toString())
-                }
-            }
-
-            val final = if (res.isSuccess) {
-                Msg("assistant", acc.toString().ifBlank { res.getOrNull() ?: "" })
-            } else {
-                val e = res.exceptionOrNull()?.message ?: "خطأ"
-                Msg("assistant", if (acc.isEmpty()) "⚠️ $e" else acc.toString() + "\n\n⚠️ $e", error = true)
-            }
-            messages = messages.dropLast(1) + final
-            streaming = false
-            img?.let { }   // الصورة تبقى فـالرسالة
-        }
-    }
+    var showMenu by remember { mutableStateOf(false) }
 
     Scaffold(
-        containerColor = Color.Transparent,
+        containerColor = Pal.bg,
         topBar = {
-            Column(Modifier.background(Color(0xF00B0D18)).statusBarsPadding()) {
-                Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    IconButton(onClick = onOpenDrawer) {
-                        Icon(Icons.Default.Menu, "المحادثات", tint = TextMain)
-                    }
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            "Latchi AI",
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = TextMain,
-                        )
-                        Text(
-                            providerName.ifBlank { "ما كاينش مزوّد" },
-                            fontSize = 10.sp,
-                            color = if (provider != null) OkGreen else TextMuted,
-                        )
-                    }
-                    IconButton(onClick = onNewChat) {
-                        Icon(Icons.Default.Edit, "جديد", tint = Violet, modifier = Modifier.size(20.dp))
-                    }
-                    IconButton(onClick = onSettings) {
-                        Icon(Icons.Default.Tune, "إعدادات", tint = TextMain, modifier = Modifier.size(21.dp))
-                    }
-                }
-                Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 14.dp).padding(bottom = 8.dp),
-                ) {
-                    ModelChip(
-                        model = model.ifBlank { "اختار موديل" },
-                        ctx = modelCtx,
-                        onClick = onPickModel,
-                    )
-                }
-            }
-        },
-        bottomBar = {
-            InputBar(
-                input = input,
-                onInput = { input = it },
-                streaming = streaming,
-                hasImage = attached != null,
-                onAttach = { pickImage.launch("image/*") },
-                onSend = { send() },
-                onStop = { stop() },
+            TopBar(
+                title = vm.activeTitle(),
+                onMenu = { showMenu = true },
+                onNew = { vm.newChat(ctx) },
+                onSettings = onOpenSettings,
             )
         },
+        bottomBar = { Composer(vm) },
     ) { pad ->
-        Box(
-            Modifier
-                .fillMaxSize()
-                .background(BgBrush)
-                .padding(pad)
-        ) {
-            if (messages.isEmpty()) {
-                EmptyState(
-                    icon = Icons.Default.AutoAwesome,
-                    title = "ابدا المحادثة",
-                    sub = "اكتب سؤالك، ولا ابعث صورة.\nالموديل: ${model.ifBlank { "ماشي مختار" }}",
-                )
-            } else {
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    items(messages, key = { it.at.toString() + it.role + it.content.hashCode() }) { m ->
-                        MessageBubble(
-                            m = m,
-                            streaming = streaming && m === messages.lastOrNull() && m.role == "assistant",
-                            onCopy = { clip.setText(AnnotatedString(m.content)) },
-                        )
-                    }
+        Box(Modifier.padding(pad).fillMaxSize()) {
+            if (vm.msgs.isEmpty()) EmptyState(onPick = { vm.send(ctx, it) })
+            else ChatList(vm)
+        }
+    }
+
+    if (showMenu) {
+        DrawerSheet(
+            chats = vm.chats,
+            activeId = vm.activeId,
+            onPick = { showMenu = false; vm.open(ctx, it) },
+            onDelete = { vm.remove(ctx, it) },
+            onClose = { showMenu = false },
+        )
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  الشريط العلوي — الواجهة الاحترافية
+// ═══════════════════════════════════════════════════════════
+@Composable
+private fun TopBar(title: String, onMenu: () -> Unit, onNew: () -> Unit, onSettings: () -> Unit) {
+    Surface(color = Pal.bg2, tonalElevation = 0.dp) {
+        Column {
+            Row(
+                Modifier.fillMaxWidth().statusBarsPadding().height(58.dp).padding(horizontal = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                IconBtn(Icons.Filled.Menu, onMenu)
+                Spacer(Modifier.width(6.dp))
+                Box(
+                    Modifier.size(34.dp).clip(RoundedCornerShape(10.dp)).background(BrandBrush),
+                    contentAlignment = Alignment.Center,
+                ) { Text("L", color = Color.White, fontWeight = FontWeight.Black, fontSize = 17.sp) }
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(L.appName, color = Pal.txt, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                    Text(
+                        title.ifBlank { L.tagline },
+                        color = Pal.txt3, fontSize = 11.sp, maxLines = 1,
+                    )
                 }
+                IconBtn(Icons.Filled.AddComment, onNew)
+                IconBtn(Icons.Filled.Settings, onSettings)
             }
+            Box(Modifier.fillMaxWidth().height(1.dp).background(Pal.line))
         }
     }
 }
 
 @Composable
-private fun MessageBubble(m: Msg, streaming: Boolean, onCopy: () -> Unit) {
-    val isUser = m.role == "user"
-    Row(
-        Modifier.fillMaxWidth(),
-        horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
+fun IconBtn(icon: androidx.compose.ui.graphics.vector.ImageVector, onClick: () -> Unit) {
+    Box(
+        Modifier.size(40.dp).clip(CircleShape).clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) { Icon(icon, null, tint = Pal.txt2, modifier = Modifier.size(21.dp)) }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  الشاشة الفارغة
+// ═══════════════════════════════════════════════════════════
+@Composable
+private fun EmptyState(onPick: (String) -> Unit) {
+    Column(
+        Modifier.fillMaxSize().padding(horizontal = 22.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
     ) {
-        if (!isUser) {
-            Box(
-                Modifier.size(28.dp).clip(CircleShape).background(BrandBrush),
-                contentAlignment = Alignment.Center,
-            ) { Text("L", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Black) }
-            Spacer(Modifier.width(8.dp))
-        }
-
-        Column(
-            Modifier.widthIn(max = 320.dp),
-            horizontalAlignment = if (isUser) Alignment.End else Alignment.Start,
+        Box(
+            Modifier.size(72.dp).clip(RoundedCornerShape(22.dp)).background(BrandBrush),
+            contentAlignment = Alignment.Center,
         ) {
-            // صورة مرفقة
-            m.image?.let { b64 ->
-                val bmp = remember(b64) {
-                    runCatching {
-                        val bytes = Base64.decode(b64, Base64.NO_WRAP)
-                        BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                    }.getOrNull()
-                }
-                if (bmp != null) {
-                    Image(
-                        bitmap = bmp.asImageBitmap(),
-                        contentDescription = null,
-                        modifier = Modifier
-                            .widthIn(max = 200.dp)
-                            .clip(RoundedCornerShape(14.dp)),
-                        contentScale = ContentScale.FillWidth,
-                    )
-                    Spacer(Modifier.height(6.dp))
-                }
-            }
-
-            Surface(
-                shape = RoundedCornerShape(
-                    topStart = 18.dp, topEnd = 18.dp,
-                    bottomStart = if (isUser) 18.dp else 5.dp,
-                    bottomEnd = if (isUser) 5.dp else 18.dp,
-                ),
-                color = if (isUser) Color.Transparent else CardBg,
-                border = if (isUser) null
-                else androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = .06f)),
-            ) {
-                Box(
-                    Modifier
-                        .background(if (isUser) UserBrush else Brush.linearGradient(listOf(CardBg, CardBg)))
-                        .padding(horizontal = 14.dp, vertical = 10.dp)
+            Text("L", color = Color.White, fontSize = 34.sp, fontWeight = FontWeight.Black)
+        }
+        Spacer(Modifier.height(18.dp))
+        Text(L.hello, color = Pal.txt, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(8.dp))
+        Text(
+            L.helloSub, color = Pal.txt2, fontSize = 13.5.sp,
+            textAlign = TextAlign.Center, lineHeight = 21.sp,
+        )
+        Spacer(Modifier.height(26.dp))
+        val items = listOf(
+            Triple("🎓", L.sug1Title, L.sug1),
+            Triple("🎨", L.sug2Title, L.sug2),
+            Triple("💻", L.sug3Title, L.sug3),
+            Triple("🌐", L.sug4Title, L.sug4),
+        )
+        Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
+            items.forEach { (em, ttl, txt) ->
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = Pal.bg2,
+                    modifier = Modifier.fillMaxWidth().clickable { onPick(txt) },
                 ) {
-                    if (m.content.isEmpty() && streaming) {
-                        TypingDots()
-                    } else {
-                        SelectionContainer {
-                            Text(
-                                text = if (isUser) AnnotatedString(m.content)
-                                else mdToAnnotated(m.content),
-                                fontSize = 14.sp,
-                                lineHeight = 21.sp,
-                                color = if (m.error) ErrRed
-                                else if (isUser) Color.White else TextMain,
-                            )
+                    Row(
+                        Modifier.padding(13.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(em, fontSize = 19.sp)
+                        Spacer(Modifier.width(11.dp))
+                        Column {
+                            Text(ttl, color = Pal.txt, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                            Text(txt, color = Pal.txt3, fontSize = 11.5.sp, maxLines = 2, lineHeight = 16.sp)
                         }
                     }
                 }
             }
+        }
+    }
+}
 
-            if (!streaming && m.content.isNotEmpty()) {
-                Row(
-                    Modifier.padding(top = 3.dp, start = 4.dp, end = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        android.text.format.DateFormat.format("HH:mm", m.at).toString(),
-                        fontSize = 9.sp,
-                        color = TextMuted.copy(alpha = .7f),
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Icon(
-                        Icons.Default.ContentCopy, "نسخ",
-                        tint = TextMuted.copy(alpha = .6f),
-                        modifier = Modifier.size(12.dp).clickable { onCopy() },
-                    )
+// ═══════════════════════════════════════════════════════════
+//  قائمة الرسائل
+// ═══════════════════════════════════════════════════════════
+@Composable
+private fun ChatList(vm: ChatVm) {
+    val listState = rememberLazyListState()
+    LaunchedEffect(vm.msgs.size, vm.streamText.length) {
+        if (vm.msgs.isNotEmpty()) {
+            listState.animateScrollToItem((vm.msgs.size - 1).coerceAtLeast(0))
+        }
+    }
+    LazyColumn(
+        state = listState,
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 14.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        items(vm.msgs, key = { it.ts.toString() + it.role + it.text.length }) { m ->
+            MessageRow(m)
+        }
+        if (vm.streaming) {
+            item {
+                Column {
+                    if (vm.streamText.isNotEmpty()) {
+                        AssistantBubble(Msg("assistant", vm.streamText, model = vm.streamModel), live = true)
+                    } else {
+                        TypingRow(vm.statusText.ifBlank { L.thinking })
+                    }
                 }
             }
         }
@@ -347,96 +216,224 @@ private fun MessageBubble(m: Msg, streaming: Boolean, onCopy: () -> Unit) {
 }
 
 @Composable
-private fun InputBar(
-    input: String,
-    onInput: (String) -> Unit,
-    streaming: Boolean,
-    hasImage: Boolean,
-    onAttach: () -> Unit,
-    onSend: () -> Unit,
-    onStop: () -> Unit,
-) {
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .background(Color(0xF00B0D18))
-            .navigationBarsPadding()
-            .imePadding()
-    ) {
+private fun MessageRow(m: Msg) {
+    if (m.role == "user") UserBubble(m) else AssistantBubble(m)
+}
+
+@Composable
+private fun UserBubble(m: Msg) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+        Spacer(Modifier.width(40.dp))
+        Surface(color = Pal.userBubble, shape = RoundedCornerShape(16.dp, 5.dp, 16.dp, 16.dp)) {
+            Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                if (m.image != null) {
+                    Base64Image(m.image, Modifier.padding(bottom = 8.dp))
+                }
+                if (m.text.isNotBlank())
+                    Text(m.text, color = Pal.txt, fontSize = 15.sp, lineHeight = 24.sp)
+            }
+        }
+    }
+}
+
+@Composable
+private fun AssistantBubble(m: Msg, live: Boolean = false) {
+    val clip = LocalClipboardManager.current
+    var copied by remember { mutableStateOf(false) }
+    Row(Modifier.fillMaxWidth()) {
+        Box(
+            Modifier.size(29.dp).clip(RoundedCornerShape(9.dp)).background(BrandBrush),
+            contentAlignment = Alignment.Center,
+        ) { Text("L", color = Color.White, fontWeight = FontWeight.Black, fontSize = 14.sp) }
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+            if (m.text.isNotBlank()) {
+                Markdown(m.text, Pal.txt)
+                if (live) Cursor()
+            }
+            if (m.image != null) {
+                Spacer(Modifier.height(8.dp))
+                Base64Image(m.image, Modifier.fillMaxWidth(0.92f))
+            }
+            if (!live && m.text.isNotBlank()) {
+                Row(Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        if (copied) L.copied else L.copy,
+                        color = if (copied) Green else Pal.txt3, fontSize = 11.sp,
+                        modifier = Modifier.clickable {
+                            clip.setText(AnnotatedString(m.text))
+                            copied = true
+                        }.padding(4.dp),
+                    )
+                }
+            }
+        }
+        Spacer(Modifier.width(30.dp))
+    }
+}
+
+@Composable
+private fun Cursor() {
+    val t = rememberInfiniteTransition(label = "c")
+    val a by t.animateFloat(
+        1f, 0f, infiniteRepeatable(tween(760, easing = LinearEasing), RepeatMode.Reverse),
+        label = "a",
+    )
+    Box(Modifier.padding(top = 3.dp).size(width = 2.dp, height = 15.dp)
+        .alpha(a).background(Blue))
+}
+
+@Composable
+private fun TypingRow(text: String) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(
+            Modifier.size(29.dp).clip(RoundedCornerShape(9.dp)).background(BrandBrush),
+            contentAlignment = Alignment.Center,
+        ) { Text("L", color = Color.White, fontWeight = FontWeight.Black, fontSize = 14.sp) }
+        Spacer(Modifier.width(10.dp))
+        val t = rememberInfiniteTransition(label = "t")
+        val a by t.animateFloat(0.35f, 1f, infiniteRepeatable(tween(700), RepeatMode.Reverse), label = "a")
+        Text(text, color = Pal.txt2, fontSize = 13.5.sp, modifier = Modifier.alpha(a))
+    }
+}
+
+@Composable
+fun Base64Image(b64: String, modifier: Modifier = Modifier) {
+    var bmp by remember(b64) { mutableStateOf<Bitmap?>(null) }
+    LaunchedEffect(b64) {
+        bmp = withContext(Dispatchers.IO) {
+            try {
+                val raw = Base64.decode(b64, Base64.DEFAULT)
+                BitmapFactory.decodeByteArray(raw, 0, raw.size)
+            } catch (e: Exception) { null }
+        }
+    }
+    val b = bmp
+    if (b != null) {
+        Image(
+            bitmap = b.asImageBitmap(),
+            contentDescription = null,
+            modifier = modifier.clip(RoundedCornerShape(13.dp)).border(1.dp, Pal.line2, RoundedCornerShape(13.dp)),
+            contentScale = ContentScale.FillWidth,
+        )
+    } else {
+        Box(
+            Modifier.fillMaxWidth().height(170.dp).clip(RoundedCornerShape(13.dp))
+                .background(Pal.bg3), contentAlignment = Alignment.Center,
+        ) { CircularProgressIndicator(color = Blue, modifier = Modifier.size(24.dp), strokeWidth = 2.dp) }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  حقل الإدخال
+// ═══════════════════════════════════════════════════════════
+@Composable
+private fun Composer(vm: ChatVm) {
+    val ctx = LocalContext.current
+    Column(Modifier.background(Pal.bg).navigationBarsPadding()) {
+        AnimatedVisibility(visible = vm.attached != null) {
+            vm.attached?.let { b64 ->
+                Row(Modifier.padding(start = 16.dp, end = 16.dp, top = 6.dp)) {
+                    Box {
+                        Base64Image(b64, Modifier.size(62.dp))
+                        Box(
+                            Modifier.align(Alignment.TopEnd).size(20.dp).clip(CircleShape)
+                                .background(Color(0xCC000000)).clickable { vm.attached = null },
+                            contentAlignment = Alignment.Center,
+                        ) { Icon(Icons.Filled.Close, null, tint = Color.White, modifier = Modifier.size(13.dp)) }
+                    }
+                }
+            }
+        }
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp),
+            Modifier.fillMaxWidth().padding(10.dp),
             verticalAlignment = Alignment.Bottom,
         ) {
             Box(
-                Modifier
-                    .size(40.dp)
-                    .clip(RoundedCornerShape(13.dp))
-                    .background(if (hasImage) Violet.copy(alpha = .25f) else CardHi)
-                    .clickable { onAttach() },
-                contentAlignment = Alignment.Center,
+                Modifier.weight(1f).clip(RoundedCornerShape(20.dp))
+                    .background(Pal.bg2).border(1.dp, Pal.line2, RoundedCornerShape(20.dp)),
             ) {
-                Icon(
-                    Icons.Default.Image, "صورة",
-                    tint = if (hasImage) Violet else TextMuted,
-                    modifier = Modifier.size(20.dp),
-                )
-            }
-            Spacer(Modifier.width(8.dp))
-
-            Surface(
-                modifier = Modifier.weight(1f),
-                shape = RoundedCornerShape(20.dp),
-                color = CardBg,
-                border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = .07f)),
-            ) {
-                TextField(
-                    value = input,
-                    onValueChange = onInput,
-                    placeholder = {
-                        Text("اكتب رسالة…", color = TextMuted.copy(alpha = .8f), fontSize = 14.sp)
-                    },
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 46.dp, max = 130.dp),
-                    colors = TextFieldDefaults.colors(
-                        focusedContainerColor = Color.Transparent,
-                        unfocusedContainerColor = Color.Transparent,
-                        focusedIndicatorColor = Color.Transparent,
-                        unfocusedIndicatorColor = Color.Transparent,
-                        focusedTextColor = TextMain,
-                        unfocusedTextColor = TextMain,
-                        cursorColor = Violet,
-                    ),
-                    maxLines = 6,
-                )
-            }
-            Spacer(Modifier.width(8.dp))
-
-            Box(
-                Modifier
-                    .size(46.dp)
-                    .clip(RoundedCornerShape(15.dp))
-                    .background(
-                        if (streaming) Brush.linearGradient(listOf(ErrRed, ErrRed))
-                        else BrandBrush
+                Row(verticalAlignment = Alignment.Bottom, modifier = Modifier.padding(5.dp)) {
+                    Box(
+                        Modifier.size(38.dp).clip(CircleShape)
+                            .clickable(enabled = !vm.streaming) { vm.pickImage() },
+                        contentAlignment = Alignment.Center,
+                    ) { Icon(Icons.Filled.AddPhotoAlternate, null, tint = Pal.txt2, modifier = Modifier.size(21.dp)) }
+                    BasicTextField(
+                        value = vm.input,
+                        onValueChange = { vm.input = it },
+                        textStyle = TextStyle(color = Pal.txt, fontSize = 15.sp, lineHeight = 22.sp),
+                        cursorBrush = androidx.compose.ui.graphics.SolidColor(Blue),
+                        maxLines = 6,
+                        modifier = Modifier.weight(1f).padding(vertical = 9.dp, horizontal = 2.dp),
+                        decorationBox = { inner ->
+                            if (vm.input.isEmpty())
+                                Text(L.inputHint, color = Pal.txt3, fontSize = 14.5.sp)
+                            inner()
+                        },
                     )
-                    .clickable { if (streaming) onStop() else onSend() },
+                }
+            }
+            Spacer(Modifier.width(8.dp))
+            val can = !vm.streaming && (vm.input.isNotBlank() || vm.attached != null)
+            Box(
+                Modifier.size(45.dp).clip(CircleShape)
+                    .background(if (can) BrandBrush else Brush.linearGradient(
+                        listOf(Pal.bg3, Pal.bg3)))
+                    .clickable(enabled = can) { vm.send(ctx, vm.input) },
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(
-                    if (streaming) Icons.Default.Stop else Icons.Default.ArrowUpward,
-                    if (streaming) "وقف" else "إرسال",
-                    tint = Color.White,
-                    modifier = Modifier.size(21.dp),
-                )
+                if (vm.streaming)
+                    CircularProgressIndicator(color = Blue, modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                else
+                    Icon(Icons.Filled.ArrowUpward, null, tint = if (can) Color.White else Pal.txt3,
+                        modifier = Modifier.size(21.dp))
             }
         }
-        if (hasImage) {
-            Row(
-                Modifier.padding(horizontal = 14.dp).padding(bottom = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(Icons.Default.AttachFile, null, tint = Violet, modifier = Modifier.size(13.dp))
-                Spacer(Modifier.width(4.dp))
-                Text("صورة مرفقة", fontSize = 10.sp, color = Violet)
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  درج المحادثات
+// ═══════════════════════════════════════════════════════════
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DrawerSheet(
+    chats: List<Chat>,
+    activeId: String,
+    onPick: (String) -> Unit,
+    onDelete: (String) -> Unit,
+    onClose: () -> Unit,
+) {
+    ModalBottomSheet(onDismissRequest = onClose, containerColor = Pal.bg2) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 28.dp)) {
+            Text(L.newChat, color = Pal.txt, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(12.dp))
+            if (chats.isEmpty()) {
+                Text("—", color = Pal.txt3, fontSize = 13.sp)
+            } else {
+                LazyColumn(Modifier.heightIn(max = 380.dp)) {
+                    items(chats, key = { it.id }) { c ->
+                        Row(
+                            Modifier.fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(if (c.id == activeId) Pal.bg3 else Color.Transparent)
+                                .clickable { onPick(c.id) }
+                                .padding(horizontal = 12.dp, vertical = 11.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                c.title.ifBlank { L.newChat },
+                                color = Pal.txt, fontSize = 13.5.sp,
+                                modifier = Modifier.weight(1f), maxLines = 1,
+                            )
+                            Icon(
+                                Icons.Filled.DeleteOutline, null, tint = Pal.txt3,
+                                modifier = Modifier.size(18.dp).clickable { onDelete(c.id) },
+                            )
+                        }
+                    }
+                }
             }
         }
     }

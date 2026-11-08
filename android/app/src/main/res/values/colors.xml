@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="violet">#7C5CFF</color>
-    <color name="cyan">#22D3EE</color>
-    <color name="bg_deep">#07080F</color>
+    <color name="violet">#8B5CF6</color>
+    <color name="cyan">#06B6D4</color>
+    <color name="blue">#3B82F6</color>
+    <color name="bg_deep">#05070D</color>
     <color name="white">#FFFFFF</color>
 </resources>

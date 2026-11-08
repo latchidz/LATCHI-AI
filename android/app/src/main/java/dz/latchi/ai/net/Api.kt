@@ -1,183 +1,245 @@
 package dz.latchi.ai.net
 
+import dz.latchi.ai.data.Engine
 import dz.latchi.ai.data.Msg
-import dz.latchi.ai.data.ModelInfo
-import dz.latchi.ai.data.FREE_MODELS
-import dz.latchi.ai.data.FREE_PRESET_ID
-import dz.latchi.ai.data.Provider
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
+import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
 
 /**
- * عميل OpenAI-compatible بسيط: SSE streaming + قائمة الموديلات.
- * بلا مكتبات — HttpURLConnection فقط ⇒ خفيف.
+ * ═══════════════════════════════════════════════════════════════
+ *  عميل NVIDIA NIM — بث SSE · رؤية · توليد صور
+ *  كل شيء مخفي: الواجهة ما كتشوف حتى مفتاح ولا موديل.
+ * ═══════════════════════════════════════════════════════════════
  */
 object Api {
 
-    private fun open(url: String, p: Provider): HttpURLConnection =
+    // ── فتح اتصال ─────────────────────────────────────────
+    private fun open(url: String, key: String, timeout: Int = 180_000): HttpURLConnection =
         (URL(url).openConnection() as HttpURLConnection).apply {
             connectTimeout = 20_000
-            readTimeout = 300_000
-            // المزوّد المجاني ما يحبش Authorization — نبعثوه غير إذا كاين مفتاح
-            if (p.apiKey.isNotBlank())
-                setRequestProperty("Authorization", "Bearer ${p.apiKey}")
+            readTimeout = timeout
+            requestMethod = "POST"
+            setRequestProperty("Authorization", "Bearer $key")
             setRequestProperty("Content-Type", "application/json; charset=utf-8")
             setRequestProperty("Accept", "application/json")
-            setRequestProperty("HTTP-Referer", "https://github.com/latchidz")
-            setRequestProperty("X-Title", "Latchi AI")
         }
 
-    // ═══════ قائمة الموديلات ═══════
-    suspend fun listModels(p: Provider): Result<List<ModelInfo>> = withContext(Dispatchers.IO) {
-        // المجاني المضمّن: ما نحتاجوش نتصلو
-        if (p.presetId == FREE_PRESET_ID) return@withContext Result.success(FREE_MODELS)
-        var conn: HttpURLConnection? = null
-        try {
-            conn = open("${p.baseUrl.trimEnd('/')}/models", p)
-            conn.requestMethod = "GET"
-            val code = conn.responseCode
-            if (code == 401 || code == 403)
-                return@withContext Result.failure(Exception("المفتاح ماشي صحيح ($code)"))
-            if (code !in 200..299)
-                return@withContext Result.failure(Exception("HTTP $code"))
+    private fun postJson(url: String, key: String, body: String, timeout: Int = 180_000): HttpURLConnection {
+        val c = open(url, key, timeout)
+        c.doOutput = true
+        c.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+        return c
+    }
 
-            val body = conn.inputStream.bufferedReader().readText()
-            val root = JSONObject(body)
-            val arr = root.optJSONArray("data") ?: root.optJSONArray("models") ?: JSONArray()
-            val out = ArrayList<ModelInfo>(arr.length())
+    // ── بناء الرسائل ──────────────────────────────────────
+    private fun messages(history: List<Msg>, extra: String?, system: String): JSONArray {
+        val arr = JSONArray()
+        arr.put(JSONObject().put("role", "system").put("content", system))
+        history.takeLast(Engine.HISTORY).forEach { m ->
+            if (m.text.isNotBlank())
+                arr.put(JSONObject().put("role", m.role).put("content", m.text))
+        }
+        if (!extra.isNullOrBlank())
+            arr.put(JSONObject().put("role", "system").put("content", extra))
+        return arr
+    }
 
-            for (i in 0 until arr.length()) {
-                val o = arr.optJSONObject(i) ?: continue
-                val id = o.optString("id").ifBlank { o.optString("name") }
-                if (id.isBlank()) continue
-                val name = o.optString("name").ifBlank { id }
-                val topCtx: Int = o.optJSONObject("top_provider")?.optInt("context_length") ?: 0
-                val ctx: Int = o.optInt("context_length").takeIf { it > 0 } ?: topCtx
-                val free = o.optString("id").endsWith(":free") ||
-                        (o.optJSONObject("pricing")?.let {
-                            it.optString("prompt").toDoubleOrNull() == 0.0 &&
-                                    it.optString("completion").toDoubleOrNull() == 0.0
-                        } ?: false)
-                // architecture كائن ⇒ input_modalities مصفوفة جوّاه
-                val mods = o.optJSONObject("architecture")?.optJSONArray("input_modalities")
-                var hasImg = false
-                if (mods != null) {
-                    var k = 0
-                    while (k < mods.length()) {
-                        if (mods.optString(k) == "image") { hasImg = true; break }
-                        k++
+    fun systemPrompt(lang: String): String = when (lang) {
+        "fr" -> "Tu es « Latchi AI », un assistant intelligent algérien. Réponds en français, " +
+                "de façon claire, directe et utile. Utilise le markdown et les blocs de code quand c'est utile."
+        "en" -> "You are \"Latchi AI\", a smart Algerian assistant. Reply in English, clearly and " +
+                "directly. Use markdown and code blocks when helpful."
+        else -> "أنت «لاشي أي آي» مساعد ذكي جزائري. ردّ بالدارجة الجزائرية المفهومة بحروف عربية واضحة. " +
+                "إذا كتب المستخدم بلغة أخرى ردّ بنفس لغته. كن مباشراً بلا حشو، واستعمل التنسيق كي يساعد."
+    }
+
+    // ═══════════════════════════════════════════════════════
+    //  بث المحادثة — مع تبديل تلقائي بين الموديلات
+    // ═══════════════════════════════════════════════════════
+    class StreamResult(val text: String, val model: String, val switches: Int)
+
+    fun streamChat(
+        history: List<Msg>,
+        extraSystem: String?,
+        lang: String,
+        onDelta: (String) -> Unit,
+        onModel: (String) -> Unit,
+        onSwitch: (String) -> Unit,
+        cancelled: () -> Boolean,
+    ): StreamResult {
+        val msgs = messages(history, extraSystem, systemPrompt(lang))
+        var lastErr = ""
+        var attempts = 0
+
+        for (model in Engine.TEXT_CHAIN) {
+            if (attempts >= Engine.MAX_ATTEMPTS || cancelled()) break
+            attempts++
+            val key = Engine.key(attempts)
+            val body = JSONObject()
+                .put("model", model)
+                .put("messages", msgs)
+                .put("max_tokens", Engine.MAX_TOKENS)
+                .put("temperature", 0.7)
+                .put("top_p", 0.95)
+                .put("stream", true)
+                .toString()
+
+            var conn: HttpURLConnection? = null
+            try {
+                conn = postJson(Engine.CHAT_URL, key, body)
+                val code = conn.responseCode
+                if (code != 200) {
+                    val err = try {
+                        conn.errorStream?.bufferedReader()?.readText()?.take(150) ?: ""
+                    } catch (_: Exception) { "" }
+                    lastErr = "HTTP $code $err"
+                    if (code == 401) break
+                    continue
+                }
+
+                val sb = StringBuilder()
+                val br = BufferedReader(InputStreamReader(conn.inputStream, Charsets.UTF_8))
+                var switched = false
+                br.use { r ->
+                    var line: String?
+                    while (true) {
+                        line = r.readLine() ?: break
+                        if (cancelled()) break
+                        val l = line.trim()
+                        if (!l.startsWith("data:")) continue
+                        val data = l.substring(5).trim()
+                        if (data == "[DONE]") break
+                        try {
+                            val j = JSONObject(data)
+                            val ch = j.optJSONArray("choices") ?: continue
+                            if (ch.length() == 0) continue
+                            val d = ch.getJSONObject(0).optJSONObject("delta") ?: continue
+                            var piece = d.optString("content", "")
+                            if (piece.isEmpty()) piece = d.optString("reasoning_content", "")
+                            if (piece.isNotEmpty()) {
+                                if (!switched) { switched = true; onModel(model) }
+                                sb.append(piece)
+                                onDelta(piece)
+                            }
+                        } catch (_: Exception) { continue }
                     }
                 }
-                val vision = hasImg || id.contains("vl") || id.contains("vision") ||
-                        id.contains("omni") || id.contains("llava")
-                out.add(ModelInfo(id = id, name = name, context = ctx, free = free, vision = vision))
+                if (sb.isNotEmpty()) return StreamResult(sb.toString(), model, attempts - 1)
+                lastErr = "رد فارغ"
+            } catch (e: Exception) {
+                lastErr = "${e.javaClass.simpleName}: ${e.message ?: ""}"
+            } finally {
+                try { conn?.disconnect() } catch (_: Exception) {}
             }
-            Result.success(out.distinctBy { it.id }.sortedBy { it.id })
-        } catch (e: Exception) {
-            Result.failure(e)
+            if (attempts < Engine.MAX_ATTEMPTS && !cancelled()) onSwitch(lastErr)
+        }
+        throw Exception(lastErr.ifBlank { "no-engine" })
+    }
+
+    // ═══════════════════════════════════════════════════════
+    //  الرؤية — وصف صورة
+    // ═══════════════════════════════════════════════════════
+    fun describe(imageB64: String, mime: String, question: String): String? {
+        val content = JSONArray()
+            .put(JSONObject().put("type", "text")
+                .put("text", question.ifBlank { "وصّف هاد الصورة بالتفصيل." }))
+            .put(JSONObject().put("type", "image_url")
+                .put("image_url", JSONObject().put("url", "data:$mime;base64,$imageB64")))
+
+        val msgArr = JSONArray().put(JSONObject().put("role", "user").put("content", content))
+
+        for ((i, model) in Engine.VISION_CHAIN.take(3).withIndex()) {
+            var conn: HttpURLConnection? = null
+            try {
+                val body = JSONObject()
+                    .put("model", model).put("messages", msgArr)
+                    .put("max_tokens", Engine.MAX_TOKENS).put("temperature", 0.4)
+                    .toString()
+                conn = postJson(Engine.CHAT_URL, Engine.key(i), body, 120_000)
+                if (conn.responseCode != 200) continue
+                val txt = conn.inputStream.bufferedReader().readText()
+                val j = JSONObject(txt)
+                val m = j.optJSONArray("choices")?.optJSONObject(0)?.optJSONObject("message")
+                val c = m?.optString("content", "") ?: ""
+                if (c.isNotBlank()) return c
+            } catch (_: Exception) {
+            } finally {
+                try { conn?.disconnect() } catch (_: Exception) {}
+            }
+        }
+        return null
+    }
+
+    // ═══════════════════════════════════════════════════════
+    //  تحويل الطلب لبرومبت إنجليزي
+    // ═══════════════════════════════════════════════════════
+    fun buildImagePrompt(userText: String): String {
+        val base = Engine.cleanPrompt(userText)
+        try {
+            val sys = "You convert image requests into ONE detailed English image-generation prompt. " +
+                    "Output ONLY the prompt, no quotes, no explanation. Include subject, setting, " +
+                    "lighting, mood, camera/lens, style, quality keywords. Max 60 words."
+            val arr = JSONArray()
+                .put(JSONObject().put("role", "system").put("content", sys))
+                .put(JSONObject().put("role", "user").put("content", base))
+            val body = JSONObject()
+                .put("model", Engine.TEXT_CHAIN[0]).put("messages", arr)
+                .put("max_tokens", Engine.MAX_TOKENS).put("temperature", 0.4)
+                .toString()
+            val conn = postJson(Engine.CHAT_URL, Engine.key(0), body, 90_000)
+            if (conn.responseCode == 200) {
+                val j = JSONObject(conn.inputStream.bufferedReader().readText())
+                val c = j.optJSONArray("choices")?.optJSONObject(0)
+                    ?.optJSONObject("message")?.optString("content", "")?.trim()?.trim('"') ?: ""
+                conn.disconnect()
+                if (c.length in 8..400) return c
+            } else conn.disconnect()
+        } catch (_: Exception) {}
+        return base
+    }
+
+    // ═══════════════════════════════════════════════════════
+    //  توليد صورة — FLUX
+    // ═══════════════════════════════════════════════════════
+    fun genImage(prompt: String): String? {
+        val prompts = JSONArray().put(JSONObject().put("text", prompt))
+        val body = JSONObject()
+            .put("text_prompts", prompts)
+            .put("cfg_scale", 7)
+            .put("seed", 0)
+            .put("steps", 30)
+            .toString()
+        var conn: HttpURLConnection? = null
+        return try {
+            conn = postJson(Engine.GENAI_URL + Engine.IMAGE_MODEL, Engine.key(0), body, 300_000)
+            if (conn.responseCode != 200) return null
+            val txt = conn.inputStream.bufferedReader().readText()
+            JSONObject(txt).optJSONArray("artifacts")
+                ?.optJSONObject(0)?.optString("base64", "")?.ifBlank { null }
+        } catch (_: Exception) {
+            null
         } finally {
             try { conn?.disconnect() } catch (_: Exception) {}
         }
     }
 
-    // ═══════ محادثة streaming ═══════
-    /**
-     * يبعث المحادثة ويستقبل الرد حرف بحرف.
-     * @return النص الكامل
-     */
-    suspend fun chat(
-        p: Provider,
-        model: String,
-        history: List<Msg>,
-        system: String,
-        temperature: Double,
-        maxTokens: Int,
-        onDelta: (String) -> Unit,
-    ): Result<String> = withContext(Dispatchers.IO) {
-        var conn: HttpURLConnection? = null
-        var reader: BufferedReader? = null
-        try {
-            val msgs = JSONArray()
-            if (system.isNotBlank())
-                msgs.put(JSONObject().put("role", "system").put("content", system))
-            history.forEach { msgs.put(it.toApi()) }
-
+    // ═══════════════════════════════════════════════════════
+    //  فحص سريع
+    // ═══════════════════════════════════════════════════════
+    fun ping(): Boolean {
+        return try {
+            val arr = JSONArray().put(JSONObject().put("role", "user").put("content", "نعم"))
             val body = JSONObject()
-                .put("model", model)
-                .put("messages", msgs)
-                .put("stream", true)
-                .put("temperature", temperature)
-                .put("max_tokens", maxTokens)
-                .toString()
-
-            conn = open("${p.baseUrl.trimEnd('/')}/chat/completions", p)
-            conn.requestMethod = "POST"
-            conn.doOutput = true
-            conn.setRequestProperty("Accept", "text/event-stream")
-            conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
-
-            val code = conn.responseCode
-            if (code !in 200..299) {
-                val err = try {
-                    conn.errorStream?.bufferedReader()?.readText() ?: ""
-                } catch (_: Exception) { "" }
-                val friendly = when (code) {
-                    401 -> "المفتاح ماشي صحيح — تحقق منو فـالإعدادات"
-                    402 -> "هذا الموديل يحب رصيد · بدّل لـ«GPT-OSS 20B · مجاني»"
-                    403 -> "ممنوع — الموديل ما عندكش حق الوصول"
-                    404 -> "الموديل ماشي موجود فـهذا المزود"
-                    429 -> "الطلب اللي قبلو مازال يخدم — استنى 5 ثواني وعاود"
-                    else -> "خطأ HTTP $code"
-                }
-                val detail = try {
-                    JSONObject(err).optJSONObject("error")?.optString("message") ?: err
-                } catch (_: Exception) { err }
-                return@withContext Result.failure(
-                    Exception(if (detail.isBlank()) friendly else "$friendly\n$detail")
-                )
-            }
-
-            val sb = StringBuilder()
-            reader = conn.inputStream.bufferedReader()
-            var line: String?
-            while (true) {
-                line = reader.readLine() ?: break
-                if (line.isEmpty()) continue
-                if (!line.startsWith("data:")) continue
-                val data = line.removePrefix("data:").trim()
-                if (data == "[DONE]") break
-                try {
-                    val j = JSONObject(data)
-                    val choices = j.optJSONArray("choices") ?: continue
-                    val d = choices.optJSONObject(0) ?: continue
-                    val piece = d.optJSONObject("delta")?.optString("content")
-                        ?: d.optJSONObject("message")?.optString("content")
-                        ?: ""
-                    if (piece.isNotEmpty()) {
-                        sb.append(piece)
-                        onDelta(piece)
-                    }
-                } catch (_: Exception) {
-                    // سطر مقطوع — نكملو
-                }
-            }
-            if (sb.isEmpty()) Result.failure(Exception("الرد جاء فارغ — جرّب موديل آخر"))
-            else Result.success(sb.toString())
-        } catch (e: Exception) {
-            val msg = when {
-                e.message?.contains("timeout", true) == true -> "انتهى الوقت — الشبكة بطيئة"
-                e.message?.contains("Unable to resolve host", true) == true -> "ما كاينش إنترنت"
-                else -> e.message ?: "خطأ شبكة"
-            }
-            Result.failure(Exception(msg))
-        } finally {
-            try { reader?.close() } catch (_: Exception) {}
-            try { conn?.disconnect() } catch (_: Exception) {}
-        }
+                .put("model", Engine.TEXT_CHAIN[0]).put("messages", arr)
+                .put("max_tokens", 2000).toString()
+            val conn = postJson(Engine.CHAT_URL, Engine.key(0), body, 20_000)
+            val ok = conn.responseCode == 200
+            conn.disconnect()
+            ok
+        } catch (_: Exception) { false }
     }
 }

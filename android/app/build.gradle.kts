@@ -13,9 +13,9 @@ android {
         applicationId = "dz.latchi.ai"
         minSdk = 23
         targetSdk = 34
-        versionCode = 2
-        versionName = "1.1.0"
-        resourceConfigurations += listOf("ar", "en")
+        versionCode = 3
+        versionName = "2.0.0"
+        resourceConfigurations += listOf("ar", "fr", "en")
     }
 
     // توقيع: keystore.properties من الـCI

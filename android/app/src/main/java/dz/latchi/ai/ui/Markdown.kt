@@ -1,159 +1,192 @@
 package dz.latchi.ai.ui
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 
 /**
- * Markdown مبسّط — بلا مكتبات.
- * يدعم: **غامق** · *مائل* · `كود` · ### عنوان · - قائمة · ```كتلة كود```
+ * عارض Markdown خفيف: عناوين · نقاط · **عريض** · `كود` · ```بلوك كود``` · اقتباس
  */
-fun mdToAnnotated(
-    text: String,
-    codeBg: Color = Color(0xFF0A0C14),
-    accent: Color = Violet,
-    codeFg: Color = Color(0xFF7DE2FF),
-): AnnotatedString = buildAnnotatedString {
-    val lines = text.split("\n")
-    var inCode = false
-    val codeBuf = StringBuilder()
-
-    fun flushCode() {
-        if (codeBuf.isNotEmpty()) {
-            withStyle(
-                SpanStyle(
-                    fontFamily = FontFamily.Monospace,
-                    color = codeFg,
-                    background = codeBg,
-                    fontSize = androidx.compose.ui.unit.TextUnit(
-                        13f, androidx.compose.ui.unit.TextUnitType.Sp
-                    ),
-                )
-            ) { append(codeBuf.toString()) }
-            codeBuf.clear()
+@Composable
+fun Markdown(text: String, color: Color, modifier: Modifier = Modifier) {
+    val blocks = remember(text) { parseBlocks(text) }
+    Column(modifier = modifier) {
+        for (b in blocks) {
+            when (b.type) {
+                BType.CODE -> CodeBlock(b.text)
+                BType.H1 -> MdText(b.text, color, 19.sp, FontWeight.Bold)
+                BType.H2 -> MdText(b.text, color, 17.sp, FontWeight.Bold)
+                BType.H3 -> MdText(b.text, color, 15.5.sp, FontWeight.SemiBold)
+                BType.BULLET -> Row(Modifier.padding(vertical = 1.dp)) {
+                    Text("•", color = Blue, fontSize = 15.sp,
+                        modifier = Modifier.padding(end = 8.dp, top = 1.dp))
+                    MdText(b.text, color, 15.sp, FontWeight.Normal, Modifier.weight(1f))
+                }
+                BType.QUOTE -> Row(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
+                    Box(Modifier.width(3.dp).height(20.dp)
+                        .background(Blue, RoundedCornerShape(2.dp)))
+                    Spacer(Modifier.width(10.dp))
+                    MdText(b.text, Pal.txt2, 14.sp, FontWeight.Normal, Modifier.weight(1f))
+                }
+                BType.NORMAL -> MdText(b.text, color, 15.sp, FontWeight.Normal)
+            }
         }
     }
-
-    lines.forEachIndexed { idx, raw ->
-        val line = raw
-        if (line.trimStart().startsWith("```")) {
-            if (inCode) { flushCode(); inCode = false }
-            else inCode = true
-            if (idx != lines.lastIndex) append("\n")
-            return@forEachIndexed
-        }
-        if (inCode) {
-            codeBuf.append(line)
-            if (idx != lines.lastIndex) codeBuf.append("\n")
-            return@forEachIndexed
-        }
-
-        // عنوان
-        val h = when {
-            line.startsWith("### ") -> 3
-            line.startsWith("## ") -> 2
-            line.startsWith("# ") -> 1
-            else -> 0
-        }
-        val body = if (h > 0) line.substring(h + 1) else line
-
-        when {
-            h == 1 -> withStyle(SpanStyle(fontWeight = FontWeight.Bold,
-                fontSize = androidx.compose.ui.unit.TextUnit(19f, androidx.compose.ui.unit.TextUnitType.Sp),
-                color = accent)) { append(body) }
-            h == 2 -> withStyle(SpanStyle(fontWeight = FontWeight.Bold,
-                fontSize = androidx.compose.ui.unit.TextUnit(17f, androidx.compose.ui.unit.TextUnitType.Sp),
-                color = accent)) { append(body) }
-            h == 3 -> withStyle(SpanStyle(fontWeight = FontWeight.SemiBold,
-                fontSize = androidx.compose.ui.unit.TextUnit(15f, androidx.compose.ui.unit.TextUnitType.Sp),
-                color = accent)) { append(body) }
-            line.trimStart().startsWith("- ") || line.trimStart().startsWith("* ") -> {
-                append("  •  ")
-                inline(this, line.trimStart().substring(2), codeBg, codeFg)
-            }
-            line.trimStart().matches(Regex("^\\d+[.)]\\s.*")) -> {
-                val num = line.trimStart().takeWhile { it.isDigit() }
-                append("  $num. ")
-                inline(this, line.trimStart().dropWhile { it.isDigit() || it == '.' || it == ')' || it == ' ' }, codeBg, codeFg)
-            }
-            line.startsWith("> ") -> withStyle(SpanStyle(color = TextMuted, fontStyle = FontStyle.Italic)) {
-                append(line.substring(2))
-            }
-            line.trim() == "---" || line.trim() == "***" -> withStyle(SpanStyle(color = CardHi)) {
-                append("────────────────")
-            }
-            else -> inline(this, line, codeBg, codeFg)
-        }
-        if (idx != lines.lastIndex) append("\n")
-    }
-    flushCode()
 }
 
-private fun inline(
-    b: androidx.compose.ui.text.AnnotatedString.Builder,
-    s: String,
-    codeBg: Color,
-    codeFg: Color,
+@Composable
+private fun MdText(
+    text: String,
+    color: Color,
+    size: TextUnit,
+    weight: FontWeight,
+    modifier: Modifier = Modifier,
 ) {
+    Text(
+        text = inline(text),
+        color = color,
+        fontSize = size,
+        fontWeight = weight,
+        lineHeight = (size.value * 1.62f).sp,
+        modifier = modifier.padding(vertical = 3.dp),
+    )
+}
+
+@Composable
+private fun CodeBlock(code: String) {
+    val scroll = rememberScrollState()
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .padding(vertical = 6.dp)
+            .background(if (Pal.dark) Color(0xFF0B1120) else Color(0xFFF2F5FA), RoundedCornerShape(12.dp))
+            .padding(12.dp)
+    ) {
+        Text(
+            text = code.trimEnd(),
+            color = if (Pal.dark) Color(0xFFC4D4EC) else Color(0xFF243247),
+            fontSize = 12.6.sp,
+            fontFamily = FontFamily.Monospace,
+            lineHeight = 19.sp,
+            modifier = Modifier.horizontalScroll(scroll),
+        )
+    }
+}
+
+private enum class BType { NORMAL, H1, H2, H3, BULLET, QUOTE, CODE }
+private data class Block(val type: BType, val text: String)
+
+private val BULLET_RE = Regex("^[-*+]\\s+")
+private val NUM_RE = Regex("^\\d+[.)]\\s+")
+
+private fun parseBlocks(src: String): List<Block> {
+    val out = mutableListOf<Block>()
+    val lines = src.replace("\r\n", "\n").split("\n")
     var i = 0
-    val n = s.length
-    while (i < n) {
-        // كود مضمّن
-        if (s[i] == '`') {
-            val end = s.indexOf('`', i + 1)
-            if (end > i) {
-                b.withStyle(SpanStyle(fontFamily = FontFamily.Monospace, color = codeFg, background = codeBg)) {
-                    append(s.substring(i + 1, end))
-                }
-                i = end + 1
-                continue
+    val para = StringBuilder()
+
+    fun flush() {
+        val t = para.toString().trim()
+        if (t.isNotEmpty()) out.add(Block(BType.NORMAL, t))
+        para.setLength(0)
+    }
+
+    while (i < lines.size) {
+        val l = lines[i].trim()
+
+        if (l.startsWith("```")) {
+            flush()
+            val code = StringBuilder()
+            i++
+            while (i < lines.size && !lines[i].trim().startsWith("```")) {
+                code.append(lines[i]).append("\n")
+                i++
             }
+            out.add(Block(BType.CODE, code.toString()))
+            i++
+            continue
         }
-        // غامق
-        if (i + 1 < n && s[i] == '*' && s[i + 1] == '*') {
-            val end = s.indexOf("**", i + 2)
-            if (end > i) {
-                b.withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
-                    append(s.substring(i + 2, end))
-                }
-                i = end + 2
-                continue
-            }
+
+        when {
+            l.startsWith("#### ") -> { flush(); out.add(Block(BType.H3, l.removePrefix("#### "))) }
+            l.startsWith("### ")  -> { flush(); out.add(Block(BType.H3, l.removePrefix("### "))) }
+            l.startsWith("## ")   -> { flush(); out.add(Block(BType.H2, l.removePrefix("## "))) }
+            l.startsWith("# ")    -> { flush(); out.add(Block(BType.H1, l.removePrefix("# "))) }
+            l.startsWith("> ")    -> { flush(); out.add(Block(BType.QUOTE, l.removePrefix("> "))) }
+            l.matches(Regex("^[-*+]\\s+.*")) ->
+                { flush(); out.add(Block(BType.BULLET, l.replaceFirst(BULLET_RE, ""))) }
+            l.matches(Regex("^\\d+[.)]\\s+.*")) ->
+                { flush(); out.add(Block(BType.BULLET, l.replaceFirst(NUM_RE, ""))) }
+            l.isEmpty() -> flush()
+            else -> { if (para.isNotEmpty()) para.append("\n"); para.append(l) }
         }
-        // مائل
-        if (s[i] == '*') {
-            val end = s.indexOf('*', i + 1)
-            if (end > i) {
-                b.withStyle(SpanStyle(fontStyle = FontStyle.Italic)) {
-                    append(s.substring(i + 1, end))
-                }
-                i = end + 1
-                continue
-            }
-        }
-        // رابط [نص](رابط)
-        if (s[i] == '[') {
-            val close = s.indexOf(']', i)
-            if (close > i && close + 1 < n && s[close + 1] == '(') {
-                val paren = s.indexOf(')', close)
-                if (paren > close) {
-                    val label = s.substring(i + 1, close)
-                    val url = s.substring(close + 2, paren)
-                    b.withStyle(SpanStyle(color = Cyan, fontWeight = FontWeight.Medium)) {
-                        append(label)
-                    }
-                    b.withStyle(SpanStyle(color = TextMuted)) { append(" ⟨$url⟩") }
-                    i = paren + 1
-                    continue
-                }
-            }
-        }
-        b.append(s[i])
         i++
+    }
+    flush()
+    return out
+}
+
+/** **عريض** · *مائل* · `كود` */
+private fun inline(text: String): AnnotatedString = buildAnnotatedString {
+    var i = 0
+    while (i < text.length) {
+        when {
+            text.startsWith("**", i) -> {
+                val end = text.indexOf("**", i + 2)
+                if (end > 0) {
+                    withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
+                        append(inline(text.substring(i + 2, end)))
+                    }
+                    i = end + 2
+                } else { append(text[i]); i++ }
+            }
+            text[i] == '`' -> {
+                val end = text.indexOf('`', i + 1)
+                if (end > 0) {
+                    withStyle(
+                        SpanStyle(
+                            fontFamily = FontFamily.Monospace,
+                            background = if (Pal.dark) Color(0xFF1B2437) else Color(0xFFE6ECF6),
+                            color = if (Pal.dark) Color(0xFFA9C8F0) else Color(0xFF14538F),
+                        )
+                    ) { append(text.substring(i + 1, end)) }
+                    i = end + 1
+                } else { append(text[i]); i++ }
+            }
+            text[i] == '*' && i + 1 < text.length && text[i + 1] != ' ' -> {
+                val end = text.indexOf('*', i + 1)
+                if (end > 0) {
+                    withStyle(SpanStyle(fontStyle = FontStyle.Italic)) {
+                        append(text.substring(i + 1, end))
+                    }
+                    i = end + 1
+                } else { append(text[i]); i++ }
+            }
+            else -> { append(text[i]); i++ }
+        }
     }
 }
